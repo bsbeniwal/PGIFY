@@ -1,4 +1,5 @@
 const express = require("express");
+const { body, validationResult } = require("express-validator");
 const Room = require("../models/Room");
 const Review = require("../models/Review");
 const User = require("../models/User");
@@ -71,10 +72,16 @@ router.get("/room/:id", async (req, res) => {
   }
 });
 
-router.post("/update-availability", async (req, res) => {
+router.post("/update-availability", [
+  body('roomId').isMongoId().withMessage('Invalid room ID')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ error: "Validation failed", errors: errors.array() });
+  }
+
   try {
     const { roomId } = req.body;
-    if (!roomId) return res.status(400).json({ error: "Room ID is required" });
 
     const room = await Room.findById(roomId);
     if (!room) return res.status(404).json({ error: "Room not found" });
@@ -90,18 +97,30 @@ router.post("/update-availability", async (req, res) => {
   }
 });
 
-router.put("/admin/update/:id", async (req, res) => {
+router.put("/admin/update/:id", [
+  body('name').optional().trim().isLength({ min: 1, max: 100 }),
+  body('price').optional().isFloat({ min: 0 }),
+  body('description').optional().trim().isLength({ max: 1000 })
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ error: "Validation failed", errors: errors.array() });
+  }
+
   try {
     const { id } = req.params;
     const updateData = {
       name: req.body.name,
       type: req.body.type,
-      price: Number(req.body.price),
+      price: req.body.price ? Number(req.body.price) : undefined,
       amenities: req.body.amenities,
       description: req.body.description,
       image: req.body.image,
       available: req.body.available
     };
+
+    // Remove undefined fields
+    Object.keys(updateData).forEach(key => updateData[key] === undefined && delete updateData[key]);
 
     const room = await Room.findByIdAndUpdate(
       id,
@@ -129,8 +148,11 @@ router.put("/admin/update/:id", async (req, res) => {
 
 router.delete("/rooms/:id", async (req, res) => {
   try {
-    await Room.findByIdAndDelete(req.params.id);
-    res.status(200).json({ message: "Room deleted" });
+    const room = await Room.findByIdAndDelete(req.params.id);
+    if (!room) {
+      return res.status(404).json({ message: "Room not found" });
+    }
+    res.status(200).json({ message: "Room deleted successfully" });
   } catch (error) {
     res.status(500).json({ message: "Error deleting room", error });
   }

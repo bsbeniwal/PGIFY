@@ -1,4 +1,5 @@
 const express = require("express");
+const { body, validationResult } = require("express-validator");
 const stripe = require("stripe")(process.env.STRIPE_SECRET);
 const Room = require("../models/Room");
 const Booking = require("../models/Booking");
@@ -19,12 +20,31 @@ const executeWithRetry = async (operation, maxRetries = 3) => {
   }
 };
 
-router.post("/create-checkout-session", async (req, res) => {
+router.post("/create-checkout-session", [
+  body('price').isFloat({ min: 0.01 }).withMessage('Price must be greater than 0'),
+  body('roomId').isMongoId().withMessage('Invalid room ID'),
+  body('userId').isMongoId().withMessage('Invalid user ID'),
+  body('checkIn').isISO8601().withMessage('Invalid check-in date'),
+  body('checkOut').isISO8601().withMessage('Invalid check-out date')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ error: "Validation failed", errors: errors.array() });
+  }
+
   try {
     const { price, roomId, userId, checkIn, checkOut } = req.body;
 
-    if (!price || price <= 0 || !roomId || !userId || !checkIn || !checkOut) {
-      return res.status(400).json({ error: "Invalid booking details" });
+    // Validate dates
+    const checkInDate = new Date(checkIn);
+    const checkOutDate = new Date(checkOut);
+    
+    if (checkInDate >= checkOutDate) {
+      return res.status(400).json({ error: "Check-out date must be after check-in date" });
+    }
+
+    if (checkInDate < new Date()) {
+      return res.status(400).json({ error: "Check-in date cannot be in the past" });
     }
 
     const session = await stripe.checkout.sessions.create({
@@ -50,22 +70,38 @@ router.post("/create-checkout-session", async (req, res) => {
   }
 });
 
-router.post("/confirm-booking", async (req, res) => {
+router.post("/confirm-booking", [
+  body('roomId').isMongoId().withMessage('Invalid room ID'),
+  body('userId').isMongoId().withMessage('Invalid user ID'),
+  body('checkIn').isISO8601().withMessage('Invalid check-in date'),
+  body('checkOut').isISO8601().withMessage('Invalid check-out date'),
+  body('totalPrice').isFloat({ min: 0.01 }).withMessage('Invalid price')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ error: "Validation failed", errors: errors.array() });
+  }
+
   let session = null;
 
   try {
     const { roomId, userId, checkIn, checkOut, totalPrice } = req.body;
 
-    if (!roomId || !userId || !checkIn || !checkOut || !totalPrice) {
-      return res.status(400).json({ error: "Missing booking details" });
+    // Validate dates
+    const checkInDate = new Date(checkIn);
+    const checkOutDate = new Date(checkOut);
+    
+    if (checkInDate >= checkOutDate) {
+      return res.status(400).json({ error: "Check-out date must be after check-in date" });
     }
 
+    // Check for overlapping bookings
     const existingBooking = await Booking.findOne({
       roomId,
       $or: [
         {
-          checkIn: { $lte: new Date(checkOut) },
-          checkOut: { $gte: new Date(checkIn) }
+          checkIn: { $lte: checkOutDate },
+          checkOut: { $gte: checkInDate }
         }
       ],
       status: { $ne: 'cancelled' }
@@ -76,21 +112,22 @@ router.post("/confirm-booking", async (req, res) => {
     }
 
     const room = await Room.findById(roomId);
-    if (!room || !room.available) {
-      return res.status(400).json({ error: "Room is not available" });
+    if (!room) {
+      return res.status(404).json({ error: "Room not found" });
     }
 
     const booking = new Booking({
       userId,
       roomId,
-      checkIn: new Date(checkIn),
-      checkOut: new Date(checkOut),
+      checkIn: checkInDate,
+      checkOut: checkOutDate,
       totalPrice,
       status: 'booked'
     });
 
     await booking.save();
 
+    // Mark room as unavailable
     room.available = false;
     await room.save();
 

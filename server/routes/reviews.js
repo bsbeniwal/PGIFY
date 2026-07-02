@@ -1,4 +1,5 @@
 const express = require('express');
+const { body, validationResult } = require('express-validator');
 const router = express.Router();
 const Review = require('../models/Review');
 const Booking = require('../models/Booking');
@@ -21,20 +22,28 @@ const updateRoomRatings = async (roomId) => {
   }
 };
 
-router.post('/add', auth, async (req, res) => {
+router.post('/add', auth, [
+  body('bookingId').isMongoId(),
+  body('roomId').isMongoId(),
+  body('rating').isInt({ min: 1, max: 5 }).withMessage('Rating must be between 1 and 5'),
+  body('review').trim().isLength({ min: 1, max: 500 }).withMessage('Review must be 1-500 characters')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ message: 'Validation failed', errors: errors.array() });
+  }
+
   try {
     const { bookingId, roomId, rating, review } = req.body;
+    const userId = req.user?.userId || req.user?.id;
 
-    if (!bookingId || !roomId || !rating || !review) {
-      return res.status(400).json({ 
-        message: 'Missing required fields',
-        received: { bookingId, roomId, rating, review }
-      });
+    if (!userId) {
+      return res.status(401).json({ message: 'Unauthorized' });
     }
 
     const booking = await Booking.findOne({
       _id: bookingId,
-      userId: req.user.id
+      userId: userId
     });
 
     if (!booking) {
@@ -46,13 +55,9 @@ router.post('/add', auth, async (req, res) => {
       return res.status(400).json({ message: 'Review already exists for this booking' });
     }
 
-    if (rating < 1 || rating > 5) {
-      return res.status(400).json({ message: 'Rating must be between 1 and 5' });
-    }
-
     const newReview = new Review({
       bookingId,
-      userId: req.user.id,
+      userId: userId,
       roomId,
       rating: Number(rating),
       review: review.trim()
@@ -74,8 +79,7 @@ router.post('/add', auth, async (req, res) => {
     console.error('Review creation error:', error);
     res.status(500).json({ 
       message: 'Error creating review', 
-      error: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      error: error.message
     });
   }
 });
@@ -88,17 +92,6 @@ router.get('/room/:roomId', async (req, res) => {
     res.json(reviews);
   } catch (error) {
     res.status(500).json({ message: 'Error fetching reviews', error: error.message });
-  }
-});
-
-router.get('/user', auth, async (req, res) => {
-  try {
-    const reviews = await Review.find({ userId: req.user.id })
-      .populate('roomId', 'name')
-      .sort({ createdAt: -1 });
-    res.json(reviews);
-  } catch (error) {
-    res.status(500).json({ message: 'Error fetching user reviews', error: error.message });
   }
 });
 

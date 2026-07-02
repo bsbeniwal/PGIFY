@@ -2,6 +2,7 @@ const express = require("express");
 const mongoose = require("mongoose");
 const dotenv = require("dotenv");
 const cors = require("cors");
+const rateLimit = require("express-rate-limit");
 
 dotenv.config();
 const app = express();
@@ -25,10 +26,15 @@ app.use(cors({
   allowedHeaders: "Content-Type,Authorization",
 }));
 
-app.use(express.json());
-app.use((req, res, next) => {
-   next();
+// Global rate limiter for API endpoints
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: "Too many requests from this IP, please try again later.",
 });
+
+app.use(express.json());
+app.use("/api/", limiter);
 
 const roomRoutes = require("./routes/roomRoutes");
 app.use("/api/rooms", roomRoutes);
@@ -54,6 +60,26 @@ app.use('/api/contact', contactRoutes);
 mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
   .then(() => console.log("✅ MongoDB Connected"))
   .catch((err) => console.log("❌ MongoDB Error:", err));
+
+// Global Error Handler
+app.use((err, req, res, next) => {
+  console.error("❌ Error:", err.stack);
+  
+  // Rate limiting errors
+  if (err.status === 429) {
+    return res.status(429).json({ error: err.message });
+  }
+  
+  // CORS errors
+  if (err.message && err.message.includes("Not allowed by CORS")) {
+    return res.status(403).json({ error: "CORS policy violation" });
+  }
+  
+  // Default error response
+  res.status(err.status || 500).json({ 
+    error: process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message 
+  });
+});
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));

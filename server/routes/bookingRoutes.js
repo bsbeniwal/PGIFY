@@ -54,7 +54,7 @@ const router = express.Router();
   router.get("/userbookings", verifyToken, async (req, res) => {
 
     try {
-      const userId = req.user?.id; // Ensure userId is extracted correctly
+      const userId = req.user?.userId || req.user?.id; // Standardized to use userId
 
       
       const bookings = await Booking.find({ userId }).populate("roomId");

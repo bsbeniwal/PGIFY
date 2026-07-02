@@ -1,6 +1,8 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const { body, validationResult } = require("express-validator");
+const rateLimit = require("express-rate-limit");
 const User = require("../models/User");
 const OTP = require("../models/OTP");
 const transporter = require("../middleware/sendOTP");
@@ -11,8 +13,42 @@ dotenv.config();
 
 const router = express.Router();
 
-router.post("/verify-otp", async (req, res) => {
+// Rate limiter for OTP requests (5 requests per 15 minutes per email)
+const otpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  keyGenerator: (req) => req.body.email,
+  message: "Too many OTP requests. Please try again later.",
+  skip: (req) => !req.body.email
+});
+
+// Password validation helper
+const validatePassword = (password) => {
+  if (password.length < 8) return "Password must be at least 8 characters";
+  if (!/[A-Z]/.test(password)) return "Password must contain an uppercase letter";
+  if (!/[0-9]/.test(password)) return "Password must contain a number";
+  if (!/[!@#$%^&*]/.test(password)) return "Password must contain a special character (!@#$%^&*)";
+  return null;
+};
+
+router.post("/verify-otp", [
+  body("email").isEmail().normalizeEmail(),
+  body("otp").isLength({ min: 6, max: 6 }).isNumeric(),
+  body("name").trim().isLength({ min: 2, max: 50 }),
+  body("password").notEmpty()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ success: false, message: "Validation failed", errors: errors.array() });
+  }
+
   const { email, otp, name, password } = req.body;
+  
+  // Validate password strength
+  const passwordError = validatePassword(password);
+  if (passwordError) {
+    return res.status(400).json({ success: false, message: passwordError });
+  }
 
   try {
     const otpEntry = await OTP.findOne({ email, otp });
@@ -37,7 +73,14 @@ router.post("/verify-otp", async (req, res) => {
   }
 });
 
-router.post("/send-otp", async (req, res) => {
+router.post("/send-otp", otpLimiter, [
+  body("email").isEmail().normalizeEmail()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ success: false, message: "Invalid email" });
+  }
+
   const { email } = req.body;
 
   try {
@@ -77,7 +120,14 @@ router.post("/send-otp", async (req, res) => {
   }
 });
 
-router.post("/send-booking-email", async (req, res) => {
+router.post("/send-booking-email", [
+  body("email").isEmail().normalizeEmail()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ success: false, message: "Invalid email" });
+  }
+
   const { email } = req.body;
 
   try {
@@ -101,21 +151,29 @@ router.post("/send-booking-email", async (req, res) => {
   }
 });
 
-router.post("/login", async (req, res) => {
+router.post("/login", [
+  body("email").isEmail().normalizeEmail(),
+  body("password").notEmpty()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ success: false, message: "Validation failed", errors: errors.array() });
+  }
+
   const { email, password } = req.body;
 
   try {
     const user = await User.findOne({ email });
-    if (!user) return res.status(400).json({ error: "User not found" });
+    if (!user) return res.status(400).json({ success: false, error: "User not found" });
 
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ error: "Invalid credentials" });
+    if (!isMatch) return res.status(400).json({ success: false, error: "Invalid credentials" });
 
     const token = jwt.sign({ userId: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "1h" });
 
-    res.json({ message: "Login successful", token });
+    res.json({ success: true, message: "Login successful", token });
   } catch (err) {
-    res.status(500).json({ error: "Server error" });
+    res.status(500).json({ success: false, error: "Server error" });
   }
 });
 
