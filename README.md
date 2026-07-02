@@ -1,4 +1,4 @@
-# PGFIY - Hotel Management System
+# PGIFY - Hotel Management System
 
 A full-stack hotel booking application built with React and Express.js, featuring secure authentication with OTP email verification, room management, payment processing, and admin controls.
 
